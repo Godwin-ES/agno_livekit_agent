@@ -82,8 +82,8 @@ You should see logs indicating the agent is connecting to LiveKit and waiting fo
 
 ### 2. **Using LiveKit Meet Custom (UI)**
 
-- Go to [LiveKit Meet Custom](https://meet.livekit.io).
-- Enter your `LIVEKIT_URL` and a valid **token** (generate one from the [LiveKit Cloud Console](https://cloud.livekit.io/)).
+- Go to [LiveKit Meet](https://meet.livekit.io).
+- E/nter your `LIVEKIT_URL` and a valid **token** (generate one from the [LiveKit Cloud Console](https://cloud.livekit.io/)) in the `Custom` tab.
 - Enter the **room name** (should match the one your agent is listening to, e.g., `room1`).
 - Join the room and interact with your agent via voice or chat.
 
