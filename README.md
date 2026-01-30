@@ -98,17 +98,6 @@ You should see logs indicating the agent is connecting to LiveKit and waiting fo
 
 ---
 
-## Troubleshooting
-
-- **No transcript or agent output?**  
-  Ensure event handlers are present in `main.py` as shown in the code.
-- **Connection issues?**  
-  Double-check your `.env` credentials and network access.
-- **Too much log output?**  
-  Adjust log levels in `main.py` as needed.
-
----
-
 ## License
 
 Apache 2.0
