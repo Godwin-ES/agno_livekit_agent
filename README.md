@@ -1,185 +1,114 @@
-# LiveKit Voice Agent with Agno Integration
+# LiveKit Agents Agno Plugin
 
-This project demonstrates how to build a voice agent using **LiveKit's VoicePipelineAgent** with **Agno's** powerful agentic capabilities including tool calling, knowledge bases, and memory.
+This plugin enables seamless integration of **Agno's agentic LLMs** with the [LiveKit Agents](https://github.com/livekit/agents) framework, allowing you to use Agno's advanced tool-calling, knowledge, and memory features in real-time voice pipelines.
 
-## Why Agno + LiveKit?
+## Why Use This Plugin?
 
-- **LiveKit** provides excellent voice infrastructure: VAD, STT, TTS, and real-time audio streaming
-- **Agno** provides powerful agent capabilities: tool calling, knowledge bases, memory, learning, and multi-agent orchestration
+- **LiveKit** provides robust real-time voice infrastructure: VAD, STT, TTS, and audio streaming.
+- **Agno** delivers powerful agent capabilities: tool calling, knowledge bases, memory, learning, and multi-agent orchestration.
 
-This integration lets you combine the best of both worlds: LiveKit's voice pipeline with Agno's intelligent agents.
+With this plugin, you can combine LiveKit's real-time voice pipeline with Agno's intelligent agents for advanced conversational AI experiences.
+
+---
 
 ## Project Structure
 
 ```
-livekit_agent/
-├── main.py                      # Example voice agent
-├── pyproject.toml               # Dependencies
-├── README.md
-└── livekit_plugins_agno/        # The Agno plugin (~130 lines total!)
-    ├── __init__.py              # Plugin registration
-    ├── agno.py                  # LLMAdapter + AgnoStream
-    └── version.py
+livekit_plugins_agno/
+├── __init__.py
+├── agno.py
+├── version.py
+└── README.md
 ```
 
-## Installation
+---
 
-1. **Clone and install dependencies:**
+## Installation & Setup
 
-```bash
-uv sync
+1. **Clone the repository:**
+    ```sh
+    git clone https://github.com/your-org/agno_livekit_agent.git
+    cd agno_livekit_agent
+    ```
+
+2. **Install dependencies using [uv](https://github.com/astral-sh/uv):**
+    ```sh
+    uv sync
+    ```
+
+3. **Set up environment variables:**
+    - Copy `.env.example` to `.env` (if present) or create a `.env` file in your project root.
+    - Fill in your credentials as follows:
+      ```
+      LIVEKIT_URL=wss://your-livekit-server.livekit.cloud
+      LIVEKIT_API_KEY=your-api-key
+      LIVEKIT_API_SECRET=your-api-secret
+      OPENAI_API_KEY=your-openai-key
+      DEEPGRAM_API_KEY=your-deepgram-key
+      ```
+    - **Get your LiveKit credentials:**  
+      Visit [LiveKit Cloud Console](https://cloud.livekit.io/) to create a project and obtain your API keys and tokens.
+
+    - **Get your OpenAI API key:**  
+      [OpenAI API Keys](https://platform.openai.com/api-keys)
+
+    - **Get your Deepgram API key:**  
+      [Deepgram Console](https://console.deepgram.com/)
+
+---
+
+## Running the Agent
+
+To start the agent server locally:
+
+```sh
+uv run main.py dev
 ```
-
-2. **Set up environment variables:**
-
-Create a `.env` file with:
-
-```env
-LIVEKIT_URL=wss://your-livekit-server.livekit.cloud
-LIVEKIT_API_KEY=your-api-key
-LIVEKIT_API_SECRET=your-api-secret
-OPENAI_API_KEY=your-openai-key
-DEEPGRAM_API_KEY=your-deepgram-key
-```
-
-## Usage
-
-### Basic Example
-
-```python
-from agno.agent import Agent
-from agno.models.openai import OpenAIChat
-from agno.tools import tool
-from livekit_plugins_agno import LLMAdapter
-
-# Define tools
-@tool
-def get_weather(city: str) -> str:
-    """Get weather for a city."""
-    return f"Weather in {city}: Sunny, 72°F"
-
-# Create Agno agent with tools
-agno_agent = Agent(
-    model=OpenAIChat(id="gpt-4o-mini"),
-    tools=[get_weather],
-    instructions="You are a helpful voice assistant."
-)
-
-# Wrap for LiveKit
-livekit_llm = LLMAdapter(agent=agno_agent)
-
-# Use in voice pipeline
-assistant = VoicePipelineAgent(
-    vad=silero.VAD.load(),
-    stt=deepgram.STT(),
-    llm=livekit_llm,
-    tts=deepgram.TTS(),
-)
-```
-
-### Running the Example Agent
-
-```bash
+or
+```sh
 python main.py dev
 ```
 
-Then connect to your LiveKit room to start talking to the agent.
+You should see logs indicating the agent is connecting to LiveKit and waiting for participants.
+
+---
+
+## Testing the Agent
+
+### 1. **Using Python (CLI)**
+
+- Run the agent as shown above.
+- You will see logs for user and agent utterances in your terminal.
+
+### 2. **Using LiveKit Meet Custom (UI)**
+
+- Go to [LiveKit Meet Custom](https://meet.livekit.io/custom).
+- Enter your `LIVEKIT_URL` and a valid **token** (generate one from the [LiveKit Cloud Console](https://cloud.livekit.io/)).
+- Enter the **room name** (should match the one your agent is listening to, e.g., `room1`).
+- Join the room and interact with your agent via voice or chat.
+
+---
 
 ## Features
 
-### Tool Calling
+- **Tool Calling:** Use Agno's @tool-decorated Python functions in your voice agent.
+- **Knowledge & Memory:** Leverage Agno's knowledge base and conversation memory.
+- **Session Persistence:** Maintain context across sessions with `session_id` and `user_id`.
+- **Streaming Responses:** Real-time streaming of LLM output to the user.
 
-The example includes three tools:
+---
 
-- **get_current_time**: Returns the current time
-- **get_weather**: Returns weather for a city (mock data)
-- **calculate**: Evaluates mathematical expressions
+## Troubleshooting
 
-### Session Persistence
+- **No transcript or agent output?**  
+  Ensure event handlers are present in `main.py` as shown in the code.
+- **Connection issues?**  
+  Double-check your `.env` credentials and network access.
+- **Too much log output?**  
+  Adjust log levels in `main.py` as needed.
 
-You can enable session persistence for conversation history:
-
-```python
-livekit_llm = LLMAdapter(
-    agent=agno_agent,
-    session_id="my-session",
-    user_id="user-123",
-)
-```
-
-### Custom Agno Agents
-
-You can use any Agno agent features:
-
-```python
-from agno.agent import Agent
-from agno.models.openai import OpenAIChat
-from agno.knowledge.url import URLKnowledge
-
-agent = Agent(
-    model=OpenAIChat(id="gpt-4o"),
-    knowledge=URLKnowledge(urls=["https://docs.example.com"]),
-    instructions="You are an expert assistant...",
-    learning=True,  # Enable learning from interactions
-)
-```
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                    LiveKit Room                          │
-│  ┌─────────┐    ┌─────────┐    ┌─────────┐              │
-│  │  User   │───▶│   VAD   │───▶│   STT   │              │
-│  │  Audio  │    │(Silero) │    │(Deepgram)│              │
-│  └─────────┘    └─────────┘    └────┬────┘              │
-│                                      │                   │
-│                                      ▼                   │
-│  ┌─────────────────────────────────────────────────┐    │
-│  │             LLMAdapter (Agno Plugin)             │    │
-│  │  ┌─────────────────────────────────────────┐    │    │
-│  │  │              Agno Agent                  │    │    │
-│  │  │  ┌─────────┐ ┌─────────┐ ┌─────────┐   │    │    │
-│  │  │  │  Tools  │ │Knowledge│ │ Memory  │   │    │    │
-│  │  │  └─────────┘ └─────────┘ └─────────┘   │    │    │
-│  │  └─────────────────────────────────────────┘    │    │
-│  └──────────────────────┬──────────────────────────┘    │
-│                         │                                │
-│                         ▼                                │
-│  ┌─────────┐    ┌─────────┐                             │
-│  │   TTS   │◀───│AgnoStream│                             │
-│  │(Deepgram)│    └─────────┘                             │
-│  └────┬────┘                                             │
-│       │                                                  │
-│       ▼                                                  │
-│  ┌─────────┐                                             │
-│  │  Audio  │                                             │
-│  │ Output  │                                             │
-│  └─────────┘                                             │
-└─────────────────────────────────────────────────────────┘
-```
-
-## API Reference
-
-### LLMAdapter
-
-```python
-LLMAdapter(
-    agent: Agent,           # The Agno Agent to wrap
-    session_id: str = None, # Optional session ID for state
-    user_id: str = None,    # Optional user ID for memory
-    stream_events: bool = False,  # Stream intermediate events
-)
-```
-
-### AgnoStream
-
-Internal class that handles streaming responses. You typically don't interact with this directly.
-
-## Contributing
-
-Contributions welcome! Please feel free to submit issues and pull requests.
+---
 
 ## License
 
-MIT
+Apache 2.0
