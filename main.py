@@ -22,6 +22,7 @@ from typing import Annotated
 
 from agno.agent import Agent as AgnoAgent
 from agno.models.openai import OpenAIChat
+from agno.db.sqlite import SqliteDb
 from agno.tools import tool
 from dotenv import load_dotenv
 from livekit.agents import (
@@ -90,7 +91,7 @@ def calculate(
 # =============================================================================
 # Create the Agno agent
 # =============================================================================
-
+memory_db = SqliteDb(db_file="memory.db")
 
 def create_agno_agent() -> AgnoAgent:
     """Create and configure the Agno agent with tools and instructions."""
@@ -121,6 +122,8 @@ markdown formatting, or complex technical jargon.""",
         markdown=False,
         # Keep responses focused
         add_datetime_to_context=True,
+        db=memory_db,
+        enable_agentic_memory=True
     )
 
     return agent
@@ -145,11 +148,15 @@ server.setup_fnc = prewarm
 async def my_agent(ctx: JobContext):
     ctx.log_context_fields={"room": ctx.room.name}
     logger.info(f"Connecting to room: {ctx.room.name}")
+    await ctx.connect()
+    participant = await ctx.wait_for_participant()
+    print(f"Connected to room {ctx.room.name} with participant {participant.identity}")
     session = AgentSession(
         stt=deepgram.STT(),
         llm=LLMAdapter(
             create_agno_agent(),
             session_id=ctx.room.name,
+            user_id=participant.identity
         ),
         tts=deepgram.TTS(),
         #turn_detection=MultilingualModel(),
@@ -172,6 +179,5 @@ async def my_agent(ctx: JobContext):
     await session.generate_reply(instructions="say hello to the user")
 
 if __name__ == "__main__":
-
     # Run the LiveKit agent
     cli.run_app(server)

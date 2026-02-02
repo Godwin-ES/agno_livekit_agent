@@ -10,5 +10,6 @@ dependencies = [
     "livekit-plugins-noise-cancellation>=0.2.5",
     "livekit-plugins-turn-detector>=1.3.12",
     "python-dotenv>=1.0.0",
+    "sqlalchemy>=2.0.46",
 ]
 
