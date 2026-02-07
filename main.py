@@ -137,7 +137,7 @@ class Assistant(Agent):
             You are curious, friendly, and have a sense of humor.""",
         )
 
-server = AgentServer()
+server = AgentServer(load_threshold=2.0)
 
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
