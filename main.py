@@ -120,20 +120,42 @@ async def publish_chat(room: rtc.Room, message: str, is_user: bool = False):
     if not message or not room.local_participant:
         return
 
-    # Create a standard LiveKit Chat Packet
-    # The 'meet' frontend expects a specific JSON structure or plain text
+    # Standard LiveKit Chat JSON format
     packet = {
         "message": message,
         "timestamp": int(datetime.now().timestamp() * 1000),
     }
     
-    # Topic 'lk-chat-topic' is what the frontend listens to
-    await room.local_participant.publish_data(
-        payload=json.dumps(packet),
-        topic="lk-chat-topic",
-        reliable=True
-    )
-    logger.info(f"Published chat: {message}")
+    try:
+        # 'lk-chat-topic' is the standard topic the frontend listens to
+        await room.local_participant.publish_data(
+            payload=json.dumps(packet),
+            topic="lk-chat-topic",
+            reliable=True
+        )
+        logger.info(f"Published to chat ({'User' if is_user else 'Agent'}): {message}")
+    except Exception as e:
+        logger.error(f"Failed to publish chat: {e}")
+
+def _get_text(msg):
+    """Safely extracts text from various LiveKit event objects."""
+    # Case 1: Standard object with 'text' (e.g., Transcription)
+    if hasattr(msg, 'text') and msg.text:
+        return msg.text
+    
+    # Case 2: Standard object with 'content' (e.g., ChatMessage)
+    if hasattr(msg, 'content'):
+        if isinstance(msg.content, str):
+            return msg.content
+        elif isinstance(msg.content, list):
+            # Join list of contents (e.g. multimodal)
+            return " ".join([str(c) for c in msg.content])
+            
+    # Case 3: List of segments (e.g. some Transcription formats)
+    if hasattr(msg, 'segments'):
+        return " ".join([s.text for s in msg.segments])
+        
+    return None
 
 # =============================================================================
 # 4. Main Agent Logic
@@ -178,15 +200,19 @@ async def my_agent(ctx: JobContext):
     
     @session.on("user_speech_committed")
     def on_user_speech(msg):
-        # msg is the transcription of what the user said
-        if msg and hasattr(msg, 'content'):
-            asyncio.create_task(publish_chat(ctx.room, msg.content, is_user=True))
+        # Log to verify the event is firing
+        logger.info(f"User speech event received: {type(msg)}")
+        text = _get_text(msg)
+        if text:
+            asyncio.create_task(publish_chat(ctx.room, text, is_user=True))
 
     @session.on("agent_speech_committed")
     def on_agent_speech(msg):
-        # msg is the response the agent just spoke
-        if msg and hasattr(msg, 'content'):
-            asyncio.create_task(publish_chat(ctx.room, msg.content, is_user=False))
+        # Log to verify the event is firing
+        logger.info(f"Agent speech event received: {type(msg)}")
+        text = _get_text(msg)
+        if text:
+            asyncio.create_task(publish_chat(ctx.room, text, is_user=False))
 
     # -----------------------------------------
 
