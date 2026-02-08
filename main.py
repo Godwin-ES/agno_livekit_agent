@@ -14,52 +14,43 @@ Run with:
     python main.py dev
 """
 import os
-from dotenv import load_dotenv, find_dotenv
-load_dotenv(find_dotenv())
-
+import json
 import logging
+import asyncio
+from datetime import datetime
+from dotenv import load_dotenv, find_dotenv
 from typing import Annotated
 
+# Load env vars
+load_dotenv(find_dotenv())
+
+# Agno Imports
 from agno.agent import Agent as AgnoAgent
 from agno.models.openai import OpenAIChat
 from agno.db.sqlite import SqliteDb
 from agno.tools import tool
-from dotenv import load_dotenv
-from livekit.agents import (
-    AutoSubscribe,
-    JobContext,
-    WorkerOptions,
-    cli,
-    llm,
-)
-from livekit import rtc
+
+# LiveKit Imports
 from livekit.agents import (
     Agent,
     AgentServer,
-    AgentSession,
+    AgentSession, # Ensure this matches your installed version (or VoicePipelineAgent)
     JobContext,
     JobProcess,
     cli,
-    inference,
     room_io,
 )
-from livekit.plugins import noise_cancellation, silero
-#from livekit.plugins.turn_detector.multilingual import MultilingualModel
-# from livekit.agents.pipeline import VoicePipelineAgent
-from livekit.plugins import deepgram, silero
-
+from livekit import rtc
+from livekit.plugins import noise_cancellation, silero, deepgram
 from livekit_plugins_agno import LLMAdapter
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
 # =============================================================================
-# Define tools for the Agno agent
+# 1. Define Tools
 # =============================================================================
-
-
 @tool
 def get_current_time() -> str:
     """Get the current time. Use this when the user asks what time it is."""
@@ -67,13 +58,11 @@ def get_current_time() -> str:
 
     return f"The current time is {datetime.now().strftime('%I:%M %p')}"
 
-
 @tool
 def get_weather(city: Annotated[str, "The city to get weather for"]) -> str:
     """Get the weather for a specific city. Use this when the user asks about weather."""
     # In a real application, this would call a weather API
     return f"The weather in {city} is sunny and 72°F (22°C)."
-
 
 @tool
 def calculate(
@@ -87,21 +76,20 @@ def calculate(
     except Exception as e:
         return f"I couldn't calculate that expression: {str(e)}"
 
-
 # =============================================================================
-# Create the Agno agent
+# 2. Configure Agno Agent
 # =============================================================================
 memory_db = SqliteDb(db_file="memory.db")
 
 def create_agno_agent() -> AgnoAgent:
     """Create and configure the Agno agent with tools and instructions."""
-
-    agent = AgnoAgent(
-        # Use OpenAI's GPT-4o-mini for fast responses
-        model=OpenAIChat(id=os.environ["GROQ_MODEL"], api_key=os.environ["GROQ_API_KEY"], base_url=os.environ["GROQ_URL"]),
-        # Add tools for the agent to use
+    return AgnoAgent(
+        model=OpenAIChat(
+            id=os.getenv("GROQ_MODEL", "gpt-4o-mini"), 
+            api_key=os.getenv("GROQ_API_KEY", os.getenv("OPENAI_API_KEY")), 
+            base_url=os.getenv("GROQ_URL")
+        ),
         tools=[get_current_time, get_weather, calculate],
-        # System instructions for the voice assistant
         instructions="""You are a helpful voice assistant. 
 
 Key behaviors:
@@ -118,16 +106,38 @@ You have access to tools for:
 
 Remember: Your responses will be spoken aloud, so avoid long lists, 
 markdown formatting, or complex technical jargon.""",
-        # Enable markdown for text display (TTS will handle the actual speech)
         markdown=False,
-        # Keep responses focused
         add_datetime_to_context=True,
         db=memory_db,
         enable_agentic_memory=True
     )
 
-    return agent
+# =============================================================================
+# 3. Helper: Publish Transcript to Chat
+# =============================================================================
+async def publish_chat(room: rtc.Room, message: str, is_user: bool = False):
+    """Publishes a transcription to the LiveKit Chat."""
+    if not message or not room.local_participant:
+        return
 
+    # Create a standard LiveKit Chat Packet
+    # The 'meet' frontend expects a specific JSON structure or plain text
+    packet = {
+        "message": message,
+        "timestamp": int(datetime.now().timestamp() * 1000),
+    }
+    
+    # Topic 'lk-chat-topic' is what the frontend listens to
+    await room.local_participant.publish_data(
+        payload=json.dumps(packet),
+        topic="lk-chat-topic",
+        reliable=True
+    )
+    logger.info(f"Published chat: {message}")
+
+# =============================================================================
+# 4. Main Agent Logic
+# =============================================================================
 class Assistant(Agent):
     def __init__(self) -> None:
         super().__init__(
@@ -137,7 +147,7 @@ class Assistant(Agent):
             You are curious, friendly, and have a sense of humor.""",
         )
 
-server = AgentServer(load_threshold=2.0)
+server = AgentServer()
 
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
@@ -150,7 +160,8 @@ async def my_agent(ctx: JobContext):
     logger.info(f"Connecting to room: {ctx.room.name}")
     await ctx.connect()
     participant = await ctx.wait_for_participant()
-    print(f"Connected to room {ctx.room.name} with participant {participant.identity}")
+    logger.info(f"Connected to room {ctx.room.name} with participant {participant.identity}")
+    # Initialize the session
     session = AgentSession(
         stt=deepgram.STT(),
         llm=LLMAdapter(
@@ -159,10 +170,25 @@ async def my_agent(ctx: JobContext):
             user_id=participant.identity
         ),
         tts=deepgram.TTS(),
-        #turn_detection=MultilingualModel(),
         vad=ctx.proc.userdata["vad"],
         preemptive_generation=True,
     )
+
+    # --- EVENT LISTENERS FOR TRANSCRIPTION ---
+    
+    @session.on("user_speech_committed")
+    def on_user_speech(msg):
+        # msg is the transcription of what the user said
+        if msg and hasattr(msg, 'content'):
+            asyncio.create_task(publish_chat(ctx.room, msg.content, is_user=True))
+
+    @session.on("agent_speech_committed")
+    def on_agent_speech(msg):
+        # msg is the response the agent just spoke
+        if msg and hasattr(msg, 'content'):
+            asyncio.create_task(publish_chat(ctx.room, msg.content, is_user=False))
+
+    # -----------------------------------------
 
     await session.start(
         agent=Assistant(),
@@ -179,5 +205,4 @@ async def my_agent(ctx: JobContext):
     await session.generate_reply(instructions="say hello to the user")
 
 if __name__ == "__main__":
-    # Run the LiveKit agent
     cli.run_app(server)
