@@ -7,12 +7,23 @@ import os
 
 from dotenv import find_dotenv, load_dotenv
 from livekit import rtc
-from livekit.agents import Agent, AgentServer, AgentSession, JobContext, JobProcess, cli, room_io
+from livekit.agents import (
+    Agent,
+    AgentServer,
+    AgentSession,
+    JobContext,
+    JobProcess,
+    MetricsCollectedEvent,
+    cli,
+    room_io,
+)
 from livekit.plugins import deepgram, noise_cancellation, silero
 
 from agent.build import create_agno_agent
 from agent.config import env_flag, participant_user_id
 from livekit_plugins_agno import LLMAdapter
+from livekit_plugins_agno.events import RoomEventPublisher
+from livekit_plugins_agno.metrics import TurnMetricsCollector
 
 load_dotenv(find_dotenv())
 
@@ -48,13 +59,31 @@ async def voice_agent(ctx: JobContext) -> None:
     logger.info("Participant connected", extra={"room": ctx.room.name, "user_id": user_id})
 
     agno_agent = create_agno_agent(user_id)
+    publisher = RoomEventPublisher(ctx.room)
+    metrics_collector = TurnMetricsCollector()
+
+    async def publish_agent_event(event: dict) -> None:
+        metrics_collector.observe_agent_event(event)
+        await publisher(event)
+
+    adapter = LLMAdapter(
+        agno_agent,
+        session_id=ctx.room.name,
+        user_id=user_id,
+        on_event=publish_agent_event,
+    )
     session = AgentSession(
         stt=deepgram.STT(),
-        llm=LLMAdapter(agno_agent, session_id=ctx.room.name, user_id=user_id),
+        llm=adapter,
         tts=deepgram.TTS(),
         vad=ctx.proc.userdata["vad"],
         preemptive_generation=env_flag("PREEMPTIVE_GENERATION", default=False),
     )
+
+    @session.on("metrics_collected")
+    def on_metrics_collected(event: MetricsCollectedEvent) -> None:
+        if summary := metrics_collector.observe(event.metrics):
+            adapter.publish_event(summary)
 
     await session.start(
         agent=Assistant(),
@@ -67,6 +96,7 @@ async def voice_agent(ctx: JobContext) -> None:
             ),
         ),
     )
+    await adapter.publish_memory_snapshot(force=True)
     session.say("Hi, I'm EchoRun. Ask me to look something up, calculate, or remember a note.")
 
 

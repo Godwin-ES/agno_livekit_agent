@@ -5,10 +5,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
+import logging
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from agno.agent import Agent
-from agno.run.agent import RunContentEvent
+from agno.run.agent import RunCompletedEvent, RunContentEvent
 from livekit.agents import llm
 from livekit.agents.llm import ChatContext, ChatRole
 from livekit.agents.types import (
@@ -19,8 +23,12 @@ from livekit.agents.types import (
 )
 
 from .version import __version__
+from .events import EVENT_VERSION, event_to_agent_event, now_ms
 
 __all__ = ["__version__", "LLMAdapter", "AgnoStream"]
+
+logger = logging.getLogger(__name__)
+EventCallback = Callable[[dict[str, Any]], Awaitable[None]]
 
 
 class LLMAdapter(llm.LLM):
@@ -32,11 +40,58 @@ class LLMAdapter(llm.LLM):
         *,
         session_id: str | None = None,
         user_id: str | None = None,
+        on_event: EventCallback | None = None,
     ) -> None:
         super().__init__()
         self._agent = agent
         self._session_id = session_id
         self._user_id = user_id
+        self._on_event = on_event
+        self._turn = 0
+        self._memory_snapshot: tuple[str, ...] | None = None
+
+    def _next_turn(self) -> int:
+        self._turn += 1
+        return self._turn
+
+    def _publish(self, event: dict[str, Any]) -> None:
+        if self._on_event is None:
+            return
+        task = asyncio.create_task(self._on_event(event))
+        task.add_done_callback(self._event_task_done)
+
+    def publish_event(self, event: dict[str, Any]) -> None:
+        """Schedule an event without blocking the voice stream."""
+        self._publish(event)
+
+    @staticmethod
+    def _event_task_done(task: asyncio.Task[None]) -> None:
+        try:
+            task.result()
+        except Exception:
+            logger.exception("Agent event publisher failed")
+
+    async def publish_memory_snapshot(self, *, force: bool = False) -> None:
+        if self._on_event is None or not hasattr(self._agent, "aget_user_memories"):
+            return
+        try:
+            memories = await self._agent.aget_user_memories(user_id=self._user_id) or []
+            values = tuple(
+                str(getattr(item, "memory", None) or getattr(item, "content", None) or item)
+                for item in memories
+            )
+            if force or values != self._memory_snapshot:
+                self._memory_snapshot = values
+                self._publish(
+                    {
+                        "v": EVENT_VERSION,
+                        "type": "memory.updated",
+                        "memories": list(values),
+                        "at": now_ms(),
+                    }
+                )
+        except Exception:
+            logger.exception("Unable to read Agno memories")
 
     @property
     def model(self) -> str:
@@ -64,6 +119,9 @@ class LLMAdapter(llm.LLM):
             agent=self._agent,
             session_id=self._session_id,
             user_id=self._user_id,
+            on_event=self._publish,
+            turn=self._next_turn(),
+            on_run_completed=self.publish_memory_snapshot,
         )
 
 
@@ -80,6 +138,9 @@ class AgnoStream(llm.LLMStream):
         agent: Agent,
         session_id: str | None = None,
         user_id: str | None = None,
+        on_event: Callable[[dict[str, Any]], None] | None = None,
+        turn: int = 1,
+        on_run_completed: Callable[[], Awaitable[None]] | None = None,
     ):
         super().__init__(
             llm_adapter, chat_ctx=chat_ctx, tools=tools, conn_options=conn_options
@@ -87,6 +148,9 @@ class AgnoStream(llm.LLMStream):
         self._agent = agent
         self._session_id = session_id
         self._user_id = user_id
+        self._on_event = on_event
+        self._turn = turn
+        self._on_run_completed = on_run_completed
 
     async def _run(self) -> None:
         # Convert chat context to the last user message for Agno
@@ -102,10 +166,23 @@ class AgnoStream(llm.LLMStream):
             user_id=self._user_id,
         )
 
-        async for event in response_stream:
-            chunk = _to_chat_chunk(event)
-            if chunk:
-                self._event_ch.send_nowait(chunk)
+        try:
+            async for event in response_stream:
+                protocol_event = event_to_agent_event(event, turn=self._turn)
+                if protocol_event is not None and self._on_event is not None:
+                    self._on_event(protocol_event)
+                chunk = _to_chat_chunk(event)
+                if chunk:
+                    self._event_ch.send_nowait(chunk)
+                if isinstance(event, RunCompletedEvent) and self._on_run_completed is not None:
+                    task = asyncio.create_task(self._on_run_completed())
+                    task.add_done_callback(LLMAdapter._event_task_done)
+        finally:
+            close = getattr(response_stream, "aclose", None)
+            if close is not None:
+                result = close()
+                if inspect.isawaitable(result):
+                    await result
 
     def _get_user_input(self) -> str | None:
         """Extract the last user message from chat context."""
