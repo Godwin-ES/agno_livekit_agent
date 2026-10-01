@@ -8,7 +8,7 @@ services:
     environment:
       PYTHONUNBUFFERED: "1"
     volumes:
-      # Agno's conversation memory (SqliteDb("memory.db")) survives redeploys.
-      - ./data/memory.db:/app/memory.db
+      # Agno memories and user notes survive deploys together.
+      - ./data:/app/data
     # Leaves room for the other containers on this 6GB, 1-core VM.
     mem_limit: 2g

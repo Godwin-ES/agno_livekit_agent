@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 from agno.agent import Agent
-from agno.run.agent import RunContentEvent, RunOutput
+from agno.run.agent import RunContentEvent
 from livekit.agents import llm
 from livekit.agents.llm import ChatContext, ChatRole
 from livekit.agents.types import (
@@ -129,13 +129,6 @@ def _to_chat_chunk(event: Any) -> llm.ChatChunk | None:
 
     if isinstance(event, RunContentEvent):
         content = event.content
-    elif isinstance(event, RunOutput) and event.content:
-        content = (
-            str(event.content) if not isinstance(event.content, str) else event.content
-        )
-    elif hasattr(event, "content") and event.content:
-        content = str(event.content)
-
     if content:
         return llm.ChatChunk(
             id="agno",

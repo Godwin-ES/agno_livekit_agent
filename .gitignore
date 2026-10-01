@@ -9,4 +9,7 @@ wheels/
 
 .env
 
+*.db
+data/
+
 KMS/
