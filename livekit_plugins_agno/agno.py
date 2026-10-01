@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -158,19 +159,30 @@ class AgnoStream(llm.LLMStream):
         if not user_input:
             return
 
-        # Run agent with streaming
+        # stream_events=True: without it Agno's stream carries only content,
+        # and the tool events never arrive.
         response_stream = self._agent.arun(
             input=user_input,
             stream=True,
+            stream_events=True,
             session_id=self._session_id,
             user_id=self._user_id,
         )
 
+        # Tool calls started but not yet finished. If the stream ends early
+        # (the caller interrupts, LiveKit cancels the turn), each is reported
+        # as failed, so the browser never shows a spinner forever.
+        open_calls: dict[str, tuple[str, float]] = {}
         try:
             async for event in response_stream:
                 protocol_event = event_to_agent_event(event, turn=self._turn)
-                if protocol_event is not None and self._on_event is not None:
-                    self._on_event(protocol_event)
+                if protocol_event is not None:
+                    if protocol_event["type"] == "tool.started":
+                        open_calls[protocol_event["id"]] = (protocol_event["tool"], time.monotonic())
+                    else:
+                        open_calls.pop(protocol_event["id"], None)
+                    if self._on_event is not None:
+                        self._on_event(protocol_event)
                 chunk = _to_chat_chunk(event)
                 if chunk:
                     self._event_ch.send_nowait(chunk)
@@ -178,6 +190,20 @@ class AgnoStream(llm.LLMStream):
                     task = asyncio.create_task(self._on_run_completed())
                     task.add_done_callback(LLMAdapter._event_task_done)
         finally:
+            if open_calls and self._on_event is not None:
+                for call_id, (tool_name, started) in open_calls.items():
+                    self._on_event(
+                        {
+                            "v": EVENT_VERSION,
+                            "type": "tool.failed",
+                            "id": call_id,
+                            "turn": self._turn,
+                            "tool": tool_name,
+                            "ms": max(0, round((time.monotonic() - started) * 1000)),
+                            "error": "interrupted",
+                            "at": now_ms(),
+                        }
+                    )
             close = getattr(response_stream, "aclose", None)
             if close is not None:
                 result = close()

@@ -32,3 +32,18 @@ async def test_clear_notes_only_clears_current_user(tmp_path) -> None:
 
     assert result["notes"] == []
     assert (await bob.list_notes())["notes"] == ["Bob note"]
+
+
+@pytest.mark.asyncio
+async def test_note_functions_run_through_their_explicit_schemas(tmp_path) -> None:
+    from agno.tools.function import FunctionCall
+
+    from tools.notes import note_functions
+
+    functions = {f.name: f for f in note_functions(create_note_tools("visitor", NotesStore(tmp_path / "n.db")))}
+    assert "user_id" not in functions["add_note"].parameters["properties"]
+
+    call = FunctionCall(function=functions["add_note"], arguments={"text": "email Sam"})
+    await call.aexecute()
+
+    assert call.result["notes"] == ["email Sam"]

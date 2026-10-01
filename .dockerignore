@@ -6,3 +6,6 @@ __pycache__
 *.pyc
 data
 tests
+*.db
+*.db-shm
+*.db-wal

@@ -69,3 +69,22 @@ class UserNoteTools:
 
 def create_note_tools(user_id: str, store: NotesStore | None = None) -> UserNoteTools:
     return UserNoteTools(user_id=user_id, store=store or NotesStore())
+
+
+def note_functions(tools: UserNoteTools) -> list[Any]:
+    """The note tools as the model sees them; the user comes from the session, never an argument."""
+    from .schema import explicit_tool, string
+
+    return [
+        explicit_tool(
+            "add_note",
+            "Use when the user asks to save, remember, or jot down a note.",
+            tools.add_note,
+            {"text": string("The note to save")},
+            ["text"],
+        ),
+        explicit_tool("list_notes", "Use when the user asks what notes they have saved.", tools.list_notes),
+        explicit_tool(
+            "clear_notes", "Use only when the user explicitly asks to delete all of their notes.", tools.clear_notes
+        ),
+    ]
