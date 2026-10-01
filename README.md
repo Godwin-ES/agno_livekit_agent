@@ -1,103 +1,119 @@
-# LiveKit Agents Agno Plugin
+# EchoRun agent
 
-This plugin enables seamless integration of **Agno's agentic LLMs** with the [LiveKit Agents](https://github.com/livekit/agents) framework, allowing you to use Agno's advanced tool-calling, knowledge, and memory features in real-time voice pipelines.
+EchoRun is a real-time voice agent that combines LiveKit's audio pipeline with an
+Agno agent, Groq-hosted `gpt-oss`, real tools, persistent memory, and a versioned
+activity stream for the browser. The custom `livekit_plugins_agno` adapter is the
+centerpiece: it turns Agno's streaming output into LiveKit speech while publishing
+tool and memory events without blocking the voice path.
 
-## Why Use This Plugin?
+## Architecture
 
-- **LiveKit** provides robust real-time voice infrastructure: VAD, STT, TTS, and audio streaming.
-- **Agno** delivers powerful agent capabilities: tool calling, knowledge bases, memory, learning, and multi-agent orchestration.
-
-With this plugin, you can combine LiveKit's real-time voice pipeline with Agno's intelligent agents for advanced conversational AI experiences.
-
----
-
-## Project Structure
-
-```
-livekit_plugins_agno/
-├── __init__.py
-├── agno.py
-├── version.py
-└── README.md
+```text
+Browser microphone / lk.chat
+        │
+        ▼
+LiveKit room ─▶ Deepgram STT ─▶ LLMAdapter ─▶ Agno agent ─▶ tools
+      ▲                               │             └──────▶ SQLite memory + notes
+      ├── agent audio ◀─ Deepgram TTS ◀┘
+      ├── lk.transcription
+      └── reliable `agent.events` ◀── tool lifecycle, memory, and turn latency
 ```
 
----
+The LiveKit worker registers an explicit name (`echorun-agent` by default), so it
+only joins rooms whose tokens dispatch that name. The frontend supplies a stable
+`visitor_id` participant attribute; display-name changes no longer split memory.
 
-## Installation & Setup
+## Toolset
 
-1. **Clone the repository:**
-    ```sh
-    git clone https://github.com/your-org/agno_livekit_agent.git
-    cd agno_livekit_agent
-    ```
+| Capability | Implementation | Data source |
+|---|---|---|
+| Weather + three-day forecast | Custom async tool | Open-Meteo |
+| Local time | Custom async tool | Open-Meteo geocoding + `zoneinfo` |
+| Currency conversion | Custom async tool | Frankfurter / ECB |
+| Safe calculation | Custom bounded AST evaluator | Local |
+| Search and news | Agno `DuckDuckGoTools` | DuckDuckGo |
+| Article reading | Agno `Newspaper4kTools` | Publisher pages |
+| Background knowledge | Agno `WikipediaTools` | Wikipedia |
+| Stocks and company info | Limited Agno `YFinanceTools` | Yahoo Finance |
+| Technology stories | Limited Agno `HackerNewsTools` | Hacker News |
+| User notes | Custom user-scoped tool | SQLite |
+| Stable preferences and facts | Agno agentic memory | SQLite |
 
-2. **Install dependencies using [uv](https://github.com/astral-sh/uv):**
-    ```sh
-    uv sync
-    ```
+Custom HTTP tools share a four-second client timeout and one bounded retry. They
+return structured cards plus a short `say` value, and recover with a speakable
+error instead of raising into the call. The calculator accepts numeric arithmetic,
+parentheses, percentages, and a small math-function allowlist; it rejects names,
+attribute access, imports, collections, and expensive exponents.
 
-3. **Set up environment variables:**
-    - Copy `.env.example` to `.env` (if present) or create a `.env` file in your project root.
-    - Fill in your credentials as follows:
-      ```
-      LIVEKIT_URL=wss://your-livekit-server.livekit.cloud
-      LIVEKIT_API_KEY=your-api-key
-      LIVEKIT_API_SECRET=your-api-secret
-      OPENAI_API_KEY=your-openai-key
-      DEEPGRAM_API_KEY=your-deepgram-key
-      ```
-    - **Get your LiveKit credentials:**  
-      Visit [LiveKit Cloud Console](https://cloud.livekit.io/) to create a project and obtain your API keys and tokens.
+## Event protocol
 
-    - **Get your OpenAI API key:**  
-      [OpenAI API Keys](https://platform.openai.com/api-keys)
+Messages are reliable JSON packets on topic `agent.events`, currently `v: 1`:
 
-    - **Get your Deepgram API key:**  
-      [Deepgram Console](https://console.deepgram.com/)
+- `tool.started` — call id, turn, tool, redacted/bounded arguments
+- `tool.completed` — duration and structured result card
+- `tool.failed` — duration and safe error text
+- `memory.updated` — current Agno memory snapshot
+- `turn.metrics` — STT, LLM first token, TTS first byte, end-to-end time, tool count
 
----
+Arguments and results are limited to 4 KiB. Publication is isolated behind a
+non-blocking callback and can never fail the audio stream. Only `RunContentEvent`
+becomes speech; completion payloads and reasoning are intentionally discarded.
 
-## Running the Agent
+## Local setup
 
-To start the agent server locally:
+Python 3.12 and [uv](https://docs.astral.sh/uv/) are required.
 
-```sh
+```bash
+cp .env.example .env
+uv sync
 uv run main.py dev
 ```
-or
-```sh
-python main.py dev
+
+Required credentials are `LIVEKIT_*`, `DEEPGRAM_API_KEY`, and `GROQ_API_KEY`.
+`GROQ_MODEL` defaults to `openai/gpt-oss-20b`; use
+`openai/gpt-oss-120b` when stronger multi-tool planning is worth the extra latency.
+`PREEMPTIVE_GENERATION` defaults to `false` to avoid storing cancelled partial
+runs. Secrets stay in `.env`; memories and notes stay in ignored `data/*.db` files.
+
+## Tests
+
+```bash
+uv run pytest
 ```
 
-You should see logs indicating the agent is connecting to LiveKit and waiting for participants.
+The suite covers mocked weather/time/currency traffic, timeouts, unknown places,
+safe math attacks and resource bounds, user-scoped notes, content-only speech,
+tool event mapping and field limits, callback isolation, generator closure, stable
+identity, and metric folding. Tests never call a live API.
 
----
+## Live verification matrix
 
-## Testing the Agent
+Run this matrix against both configured models after deploying the backend. Record
+the metrics-panel end-to-end time rather than estimating it.
 
-### 1. **Using Python (CLI)**
+| Prompt | Expected tool/path | 20B result / latency | 120B result / latency |
+|---|---|---|---|
+| What's the weather in Lagos? | `get_weather` | Pending live check | Pending live check |
+| What time is it in Tokyo? | `get_time` | Pending live check | Pending live check |
+| Convert 150 euros to dollars | `convert_currency` | Pending live check | Pending live check |
+| What's 18 percent of 2,450? | `calculate` | Pending live check | Pending live check |
+| Latest SpaceX news; tell me more about the first | search → article | Pending live check | Pending live check |
+| How's Nvidia stock doing? | YFinance price/info | Pending live check | Pending live check |
+| Remember Celsius; reconnect; weather in Accra | memory → weather | Pending live check | Pending live check |
+| Add a note to email Sam; list notes | notes | Pending live check | Pending live check |
+| Interrupt midway through an answer | clean cancellation, no duplicate speech | Pending live check | Pending live check |
 
-- Run the agent as shown above.
-- You will see logs for user and agent utterances in your terminal.
+## Deployment
 
-### 2. **Using LiveKit Meet Custom (UI)**
+Deploy the backend before the frontend because token dispatch requires the named
+worker to be registered first.
 
-- Go to [LiveKit Meet](https://meet.livekit.io).
-- Enter your `LIVEKIT_URL` and a valid **token** (generate one from the [LiveKit Cloud Console](https://cloud.livekit.io/)) in the `Custom` tab.
-- Enter the **room name** (should match the one your agent is listening to, e.g., `room1`).
-- Join the room and interact with your agent via voice or chat.
+```bash
+./deploy.sh
+```
 
----
-
-## Features
-
-- **Tool Calling:** Use Agno's @tool-decorated Python functions in your voice agent.
-- **Knowledge & Memory:** Leverage Agno's knowledge base and conversation memory.
-- **Session Persistence:** Maintain context across sessions with `session_id` and `user_id`.
-- **Streaming Responses:** Real-time streaming of LLM output to the user.
-
----
-
-## License
-
-Apache 2.0
+The script preserves `~/agno-livekit-agent/.env` and `data/` on the Oracle VM,
+rebuilds the container, starts it, and prints the last worker logs. Confirm those
+logs include a registered worker for the configured `AGENT_NAME`. Then deploy the
+frontend with the same `AGENT_NAME` in Vercel and run the matrix above on its
+preview URL before promoting it.
