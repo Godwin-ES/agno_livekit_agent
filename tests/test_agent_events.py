@@ -212,3 +212,11 @@ async def test_a_tool_call_cut_off_by_an_interruption_is_reported_as_failed() ->
     assert [event["type"] for event in events] == ["tool.started", "tool.failed"]
     assert events[1]["error"] == "interrupted"
     assert events[1]["id"] == events[0]["id"]
+
+
+def test_notes_updated_event_carries_the_saved_notes() -> None:
+    from livekit_plugins_agno.events import notes_updated_event
+
+    event = notes_updated_event(["Email Sam", "Buy milk"])
+
+    assert event | {"at": 0} == {"v": 1, "type": "notes.updated", "notes": ["Email Sam", "Buy milk"], "at": 0}

@@ -72,6 +72,11 @@ def now_ms() -> int:
     return int(time.time() * 1000)
 
 
+def notes_updated_event(notes: list[str]) -> dict[str, Any]:
+    """The user's saved notes, sent on connect so a returning user sees them at once."""
+    return {"v": EVENT_VERSION, "type": "notes.updated", "notes": bounded_value(list(notes)), "at": now_ms()}
+
+
 def _size(value: Any) -> int:
     # ASCII-escaped JSON is never shorter than UTF-8 JSON, so a value that
     # fits here fits however the payload is encoded.

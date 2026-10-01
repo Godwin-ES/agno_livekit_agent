@@ -21,8 +21,9 @@ from livekit.plugins import deepgram, noise_cancellation, silero
 
 from agent.build import create_agno_agent
 from agent.config import env_flag, participant_user_id
+from tools.notes import NotesStore
 from livekit_plugins_agno import LLMAdapter
-from livekit_plugins_agno.events import RoomEventPublisher
+from livekit_plugins_agno.events import RoomEventPublisher, notes_updated_event
 from livekit_plugins_agno.metrics import TurnMetricsCollector
 
 load_dotenv(find_dotenv())
@@ -97,6 +98,10 @@ async def voice_agent(ctx: JobContext) -> None:
         ),
     )
     await adapter.publish_memory_snapshot(force=True)
+    try:
+        adapter.publish_event(notes_updated_event(NotesStore().list(user_id)))
+    except Exception:
+        logger.exception("Unable to load saved notes")
     session.say("Hi, I'm EchoRun. Ask me to look something up, calculate, or remember a note.")
 
 
