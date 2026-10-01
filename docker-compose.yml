@@ -1,0 +1,14 @@
+# The agent is a LiveKit worker: it connects OUT to LIVEKIT_URL and waits for
+# rooms, so there's no port to publish and no reverse proxy to configure.
+services:
+  agent:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      # Agno's conversation memory (SqliteDb("memory.db")) survives redeploys.
+      - ./data/memory.db:/app/memory.db
+    # Leaves room for the other containers on this 6GB, 1-core VM.
+    mem_limit: 2g
